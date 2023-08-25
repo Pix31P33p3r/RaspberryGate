@@ -1,20 +1,18 @@
-from logs import log
-import pyudev, threading
-import evdev
 import ctypes
+import evdev
+import pyudev
+import threading
 import extractData as exd
-
+from logs import log
 
 def get_connected_usb_devices():
-
-    '''get usb device'''
+    """Get connected USB devices."""
     devices = [evdev.InputDevice(device) for device in evdev.list_devices()]
     usb_devices = [device for device in devices if 'usb' in device.phys.lower()]
     return usb_devices
 
-def wait_for_usb_connection_or_disconnection(connected=True):
-
-    '''wait for usb ports updates'''
+def wait_for_usb_events(connected=True):
+    """Wait for USB ports updates."""
     context = pyudev.Context()
     monitor = pyudev.Monitor.from_netlink(context)
     monitor.filter_by(subsystem='usb')
@@ -22,7 +20,7 @@ def wait_for_usb_connection_or_disconnection(connected=True):
     condition = threading.Condition()
 
     def device_event(observer, device):
-        if (connected and device.action == 'add') or (connected and device.action == 'remove'):
+        if (connected and device.action == 'add') or (not connected and device.action == 'remove'):
             with condition:
                 condition.notify()
 
@@ -33,32 +31,27 @@ def wait_for_usb_connection_or_disconnection(connected=True):
         condition.wait()
 
     observer.stop()
-    
 
-def terminate_thread(thread):
+def gracefully_terminate_threads(thread_list):
+    """Gracefully terminate threads."""
+    for thread in thread_list:
+        thread.stop_requested = True
+        thread.join()
 
-    '''Terminate a thread forcefully.'''
-    if not thread.is_alive():
-        return
-
-    thread_id = thread.ident
-    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), ctypes.py_object(SystemExit))
-    if res > 1:
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), 0)
-        log(log_file).info('Failed to terminate thread:', thread)
-      
-def reset_threads( old_threads_list, new_devices_list ):
+def reset_threads(old_thread_list, new_devices_list):
+    """Update thread list with new devices."""
+    gracefully_terminate_threads(old_thread_list)
     
-    '''update thread list'''
-    if old_threads_list:
-        for thread in old_threads_list:
-            terminate_thread(thread)
-    
-    new_threads_list = []
+    new_thread_list = []
     
     for device in new_devices_list:
         thread = threading.Thread(target=exd.collectId, args=(device,))
         thread.start()
-        new_threads_list.append(thread)
+        new_thread_list.append(thread)
     
-    return new_threads_list
+    return new_thread_list
+
+# Usage
+connected_usb_devices = get_connected_usb_devices()
+threads = reset_threads(threads, connected_usb_devices)
+wait_for_usb_events(connected=False)  # Wait for USB disconnections
